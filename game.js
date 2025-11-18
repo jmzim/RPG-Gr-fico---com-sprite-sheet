@@ -1,4 +1,6 @@
 // game.js - RPG gráfico com sprite sheet, nível e combate simples
+// Versão corrigida: mostra status de carregamento da sprite sheet, fallback visível,
+// corrige remoção de inimigo no tile correto e reduz drop excessivo de poções.
 
 const SHEET_URL = "https://opengameart.org/sites/default/files/icons_12.png"; // sprite sheet pública
 
@@ -13,6 +15,7 @@ const hud = document.getElementById("hud");
 const logDiv = document.getElementById("log");
 const btnInventory = document.getElementById("btn-inventory");
 const btnRestart = document.getElementById("btn-restart");
+const btnHeal = document.getElementById("btn-heal");
 
 // mapa: 0 = chão, 1 = árvore (obstáculo), 2 = inimigo
 let map = [
@@ -40,7 +43,7 @@ let player = {
   xpProx: 15
 };
 
-// variedade de inimigos (base XP), usaremos index para escolher aleatório
+// variedade de inimigos (base XP)
 const inimigosBase = [
   { nome: "Goblin", hp: 14, ataque: 3, xp: 8 },
   { nome: "Lobo", hp: 18, ataque: 4, xp: 10 },
@@ -53,6 +56,7 @@ const inimigosBase = [
 let inimigoAtual = null;
 
 // configuração dos sprites dentro da sheet (sx,sy,sw,sh em px)
+// OBS: se os recortes não baterem com a sheet, ajuste os valores aqui.
 const tileSpecs = {
   ground: { sx: 0,  sy: 0,  sw: 24, sh: 24 },
   tree:   { sx: 48, sy: 0,  sw: 24, sh: 24 },
@@ -60,7 +64,7 @@ const tileSpecs = {
   hero:   { sx: 96, sy: 0,  sw: 24, sh: 24 }
 };
 
-const sprites = { sheet: { src: SHEET_URL } };
+const sprites = { sheet: { src: SHEET_URL, img: null, loaded: false } };
 
 // carrega imagens com crossOrigin para reduzir chance de erro CORS
 function loadSprites(spritesObj, cb) {
@@ -70,8 +74,20 @@ function loadSprites(spritesObj, cb) {
   keys.forEach(k => {
     const img = new Image();
     img.crossOrigin = "anonymous";
-    img.onload = () => { loaded++; spritesObj[k].img = img; if (loaded === keys.length) cb(); };
-    img.onerror = () => { console.warn("Erro ao carregar", spritesObj[k].src); loaded++; spritesObj[k].img = null; if (loaded === keys.length) cb(); };
+    img.onload = () => {
+      loaded++;
+      spritesObj[k].img = img;
+      spritesObj[k].loaded = true;
+      console.log(`[loadSprites] carregado: ${spritesObj[k].src}`);
+      if (loaded === keys.length) cb();
+    };
+    img.onerror = (ev) => {
+      loaded++;
+      spritesObj[k].img = null;
+      spritesObj[k].loaded = false;
+      console.warn(`[loadSprites] erro ao carregar: ${spritesObj[k].src}`, ev);
+      if (loaded === keys.length) cb();
+    };
     img.src = spritesObj[k].src;
   });
 }
@@ -86,9 +102,11 @@ function log(txt) {
 
 function drawTileFromSheet(spec, dx, dy, dSize = TILE) {
   if (!sprites.sheet.img || !spec) {
-    // fallback: retângulo colorido
-    ctx.fillStyle = "#666";
+    // fallback: retângulo colorido (mais visível)
+    ctx.fillStyle = "#6b6b6b";
     ctx.fillRect(dx, dy, dSize, dSize);
+    ctx.strokeStyle = "#333";
+    ctx.strokeRect(dx+1, dy+1, dSize-2, dSize-2);
     return;
   }
   ctx.drawImage(sprites.sheet.img,
@@ -105,18 +123,47 @@ function drawGrid() {
       // chão sempre
       drawTileFromSheet(tileSpecs.ground, px, py);
       // obstáculos / inimigos sobre o chão
-      if (map[r][c] === 1) drawTileFromSheet(tileSpecs.tree, px, py);
-      if (map[r][c] === 2) drawTileFromSheet(tileSpecs.enemy, px, py);
+      if (map[r][c] === 1) {
+        // se sprite não carregou, desenhar árvore estilizada
+        if (!sprites.sheet.img) {
+          ctx.fillStyle = "#2b8b2b";
+          ctx.fillRect(px + 10, py + 6, TILE - 20, TILE - 20);
+        } else {
+          drawTileFromSheet(tileSpecs.tree, px, py);
+        }
+      }
+      if (map[r][c] === 2) {
+        if (!sprites.sheet.img) {
+          ctx.fillStyle = "#8b2b2b";
+          ctx.fillRect(px + 8, py + 8, TILE - 16, TILE - 16);
+        } else {
+          drawTileFromSheet(tileSpecs.enemy, px, py);
+        }
+      }
     }
   }
-  // desenha jogador por cima
-  drawTileFromSheet(tileSpecs.hero, player.x * TILE, player.y * TILE);
+  // desenha jogador por cima (se sprite ausente, desenha um triângulo simples)
+  if (!sprites.sheet.img) {
+    ctx.fillStyle = "#ffd166";
+    const cx = player.x * TILE + TILE / 2;
+    const cy = player.y * TILE + TILE / 2;
+    ctx.beginPath();
+    ctx.moveTo(cx, cy - 14);
+    ctx.lineTo(cx - 12, cy + 10);
+    ctx.lineTo(cx + 12, cy + 10);
+    ctx.closePath();
+    ctx.fill();
+  } else {
+    drawTileFromSheet(tileSpecs.hero, player.x * TILE, player.y * TILE);
+  }
 }
 
 function showHUD() {
+  const spritesOk = sprites.sheet.loaded ? "Sim" : "Não";
   hud.innerHTML = `
     <strong>${player.nome}</strong> — Nível: ${player.nivel} | XP: ${player.xp}/${player.xpProx}
     <br>Vida: ${player.hp}/${player.maxHp} | Ataque: ${player.ataque} | Poções: ${countItem("Poção de cura")}
+    <br>Sprites carregados: <strong>${spritesOk}</strong>
     <br>Use as setas do teclado para mover. Encontre inimigos (tiles com inimigos).
   `;
 }
@@ -127,23 +174,20 @@ function countItem(name) {
 
 // Inicia combate com inimigo baseado no nivel do jogador
 function iniciarCombateEm(nx, ny) {
-  // escolhe inimigo com base no nível (quanto maior o nível, maior chance dos inimigos fortes)
   const maxIdx = Math.min(inimigosBase.length - 1, Math.floor(player.nivel / 2) + 2);
   const idx = Math.floor(Math.random() * (maxIdx + 1));
   const base = Object.assign({}, inimigosBase[idx]);
-  // escala stats com nível
   base.hp += player.nivel * 6;
   base.ataque += Math.floor(player.nivel * 0.9);
   inimigoAtual = base;
   log(`Você encontrou um ${inimigoAtual.nome}!`);
-  combateTurno();
+  // Não executar todos os turns automaticamente — vamos executar até um turno por chamada
+  combateTurno(nx, ny);
 }
 
 // Simples sistema de turno (jogador ataca, inimigo ataca)
-function combateTurno() {
+function combateTurno(nx, ny) {
   if (!inimigoAtual) return;
-  // mostra opções no log (no futuro podemos abrir UI)
-  // ataque do jogador automático quando encontra: dano variável
   const danoPlayer = player.ataque + Math.floor(Math.random() * 3);
   inimigoAtual.hp -= danoPlayer;
   log(`Você ataca ${inimigoAtual.nome} e causa ${danoPlayer} de dano.`);
@@ -151,16 +195,19 @@ function combateTurno() {
     // vitória
     log(`Você derrotou o ${inimigoAtual.nome}! Ganhou ${inimigoAtual.xp} XP.`);
     player.xp += inimigoAtual.xp;
-    // drop chance
-    if (Math.random() < 0.7) {
+    // drop chance reduzida
+    if (Math.random() < 0.45) {
       player.inventario.push("Poção de cura");
       log("Você encontrou uma Poção de cura!");
     }
-    // recupera um pouco
     player.hp = Math.min(player.maxHp, player.hp + 5 + player.nivel);
-    // remover inimigo do mapa (procura tile mais próximo)
-    removeNearestEnemyTile();
-    // checar level up
+    // remover inimigo do tile específico (nx, ny) — usa as coordenadas passadas
+    if (typeof nx === "number" && typeof ny === "number") {
+      if (map[ny] && map[ny][nx] === 2) map[ny][nx] = 0;
+    } else {
+      // fallback: limpa o tile do jogador
+      if (map[player.y] && map[player.y][player.x] === 2) map[player.y][player.x] = 0;
+    }
     checarLevelUp();
     inimigoAtual = null;
     drawGrid();
@@ -170,7 +217,6 @@ function combateTurno() {
 
   // inimigo contra-ataca
   let danoInimigo = inimigoAtual.ataque + Math.floor(Math.random() * 3);
-  // efeitos especiais
   if (inimigoAtual.especial === "fogo" && Math.random() < 0.25) {
     danoInimigo += 4;
     log("Ataque especial: fogo!");
@@ -190,25 +236,7 @@ function combateTurno() {
     return;
   }
 
-  // turno termina, espera próximo movimento (neste exemplo o combate acontece automaticamente ao entrar no tile)
-}
-
-// Remove a primeira tile inimigo encontrada próxima ao jogador (para simplificar)
-function removeNearestEnemyTile() {
-  for (let r = 0; r < MAP_SIZE; r++) {
-    for (let c = 0; c < MAP_SIZE; c++) {
-      if (map[r][c] === 2) {
-        // achamos um inimigo: se estiver próximo ou não, vamos remover o que estava no tile que o jogador entrou
-        // para garantir, preferimos remover o que estiver na mesma posição do jogador se existir
-        if (r === player.y && c === player.x) {
-          map[r][c] = 0;
-          return;
-        }
-      }
-    }
-  }
-  // fallback: tenta limpar o tile em que o jogador se encontra
-  if (map[player.y][player.x] === 2) map[player.y][player.x] = 0;
+  // mantém inimigoAtual para possível continuidade (se quiser mais turnos depois)
 }
 
 // checa e aplica subida de nível
@@ -264,7 +292,7 @@ window.addEventListener("keydown", e => {
   }
   // inimigo
   if (map[ny][nx] === 2) {
-    // move para o tile e inicia combate
+    // move para o tile e inicia combate (passa nx, ny para remover corretamente)
     player.x = nx; player.y = ny;
     drawGrid();
     showHUD();
@@ -284,6 +312,7 @@ btnInventory.addEventListener("click", () => {
 btnRestart.addEventListener("click", () => {
   if (confirm("Reiniciar o jogo?")) reiniciarJogo();
 });
+btnHeal.addEventListener("click", () => usarPocao());
 
 function reiniciarJogo() {
   // reset player
@@ -312,6 +341,13 @@ function reiniciarJogo() {
 
 // Carregamento inicial
 loadSprites(sprites, () => {
+  if (sprites.sheet.loaded) {
+    console.log("[game] sprite sheet carregada com sucesso.");
+    log("Sprite sheet carregada com sucesso.");
+  } else {
+    console.warn("[game] sprite sheet NÃO carregou — usando fallback visual.");
+    log("Aviso: sprite sheet não carregou. O jogo continuará com gráficos fallback.");
+  }
   drawGrid();
   showHUD();
   log("Jogo carregado. Use as setas para se mover e encontrar inimigos.");

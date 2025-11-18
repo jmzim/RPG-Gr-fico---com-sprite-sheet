@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="pt-br">
+<head>
+  <meta charset="utf-8"/>
+  <title>Sprite Inspector - Escolha ícones</title>
+  <style>
+    body { background:#222; color:#fff; font-family:Arial; text-align:center; padding:12px; }
+    canvas { border:2px solid #666; image-rendering: pixelated; cursor: crosshair; }
+    #controls { margin-top:10px; display:flex; gap:8px; justify-content:center; flex-wrap:wrap; }
+    input, button { padding:6px 8px; border-radius:6px; border: none; }
+    button { background:#fec260; color:#111; font-weight:700; cursor:pointer; }
+    .info { margin-top:8px; font-size:13px; color:#ddd; }
+    textarea { width:100%; height:90px; margin-top:10px; background:#111; color:#eee; border:1px solid #333; padding:8px; border-radius:6px; }
+    .small { font-size:12px; color:#bbb; }
+  </style>
+</head>
+<body>
+  <h2>Sprite Inspector</h2>
+  <p class="small">Abra a sprite sheet e clique para selecionar o tile. Defina largura/altura do tile e use os botões para atribuir.</p>
+
+  <div>
+    <canvas id="cv" width="600" height="300"></canvas>
+  </div>
+
+  <div id="controls">
+    <input id="url" style="width:360px" placeholder="Cole o link da sprite sheet aqui (ou deixe padrão)" />
+    <input id="tw" type="number" value="24" min="4" style="width:70px" /> largura (px)
+    <input id="th" type="number" value="24" min="4" style="width:70px" /> altura (px)
+    <button id="load">Carregar</button>
+    <button id="hero">Definir como HERO</button>
+    <button id="tree">Definir como TREE</button>
+    <button id="enemy">Definir como ENEMY</button>
+    <button id="copy">Copiar tileSpecs JSON</button>
+  </div>
+
+  <div class="info" id="coords">Coords: -- , -- — Tile atual: -- x --</div>
+  <textarea id="out" readonly placeholder="tileSpecs JSON aparecerá aqui"></textarea>
+
+<script>
+  const DEFAULT = "https://opengameart.org/sites/default/files/icons_12.png";
+  const cv = document.getElementById("cv");
+  const ctx = cv.getContext("2d");
+  const urlInput = document.getElementById("url");
+  const twInput = document.getElementById("tw");
+  const thInput = document.getElementById("th");
+  const loadBtn = document.getElementById("load");
+  const heroBtn = document.getElementById("hero");
+  const treeBtn = document.getElementById("tree");
+  const enemyBtn = document.getElementById("enemy");
+  const copyBtn = document.getElementById("copy");
+  const coordsDiv = document.getElementById("coords");
+  const out = document.getElementById("out");
+
+  let img = new Image();
+  img.crossOrigin = "anonymous";
+  let sheetLoaded = false;
+  let sheetScale = 1;
+  let selected = { sx:0, sy:0, sw:24, sh:24 };
+  let tileSpecs = { ground:null, tree:null, enemy:null, hero:null };
+
+  urlInput.value = DEFAULT;
+
+  function drawSheet() {
+    ctx.clearRect(0,0,cv.width,cv.height);
+    if (!sheetLoaded) {
+      ctx.fillStyle = "#333";
+      ctx.fillRect(0,0,cv.width,cv.height);
+      ctx.fillStyle = "#fff";
+      ctx.fillText("Clique em 'Carregar' para abrir a sprite sheet", 10,20);
+      return;
+    }
+    const iw = img.width, ih = img.height;
+    const scaleX = cv.width / iw;
+    const scaleY = cv.height / ih;
+    sheetScale = Math.min(scaleX, scaleY, 1);
+    const dw = Math.round(iw * sheetScale);
+    const dh = Math.round(ih * sheetScale);
+    ctx.drawImage(img, 0, 0, iw, ih, 0, 0, dw, dh);
+
+    const tw = parseInt(twInput.value,10) || 24;
+    const th = parseInt(thInput.value,10) || 24;
+    ctx.strokeStyle = "rgba(255,255,255,0.08)";
+    for (let x = 0; x <= dw; x += Math.round(tw*sheetScale)) {
+      ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,dh); ctx.stroke();
+    }
+    for (let y = 0; y <= dh; y += Math.round(th*sheetScale)) {
+      ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(dw,y); ctx.stroke();
+    }
+    ctx.strokeStyle = "#fec260";
+    ctx.lineWidth = 2;
+    const selX = Math.round(selected.sx * sheetScale);
+    const selY = Math.round(selected.sy * sheetScale);
+    const selW = Math.round(selected.sw * sheetScale);
+    const selH = Math.round(selected.sh * sheetScale);
+    ctx.strokeRect(selX+1, selY+1, selW-2, selH-2);
+  }
+
+  function loadImage() {
+    sheetLoaded = false;
+    img = new Image();
+    img.crossOrigin = "anonymous";
+    img.onload = () => {
+      sheetLoaded = true;
+      drawSheet();
+      coordsDiv.innerText = `Imagem carregada: ${img.width} x ${img.height} px`;
+    };
+    img.onerror = (e) => {
+      sheetLoaded = false;
+      coordsDiv.innerText = "Erro ao carregar a imagem. Verifique o link ou CORS.";
+      drawSheet();
+      console.warn("Erro carregando imagem", e);
+    };
+    img.src = urlInput.value || DEFAULT;
+  }
+
+  loadBtn.addEventListener("click", loadImage);
+
+  cv.addEventListener("mousemove", (ev) => {
+    if (!sheetLoaded) return;
+    const rect = cv.getBoundingClientRect();
+    const mx = ev.clientX - rect.left;
+    const my = ev.clientY - rect.top;
+    const rx = Math.floor(mx / sheetScale);
+    const ry = Math.floor(my / sheetScale);
+    const tw = parseInt(twInput.value,10) || 24;
+    const th = parseInt(thInput.value,10) || 24;
+    coordsDiv.innerText = `Coords: ${rx}, ${ry} — Tile atual: ${tw} x ${th}`;
+  });
+
+  cv.addEventListener("click", (ev) => {
+    if (!sheetLoaded) return;
+    const rect = cv.getBoundingClientRect();
+    const mx = ev.clientX - rect.left;
+    const my = ev.clientY - rect.top;
+    const rx = Math.floor(mx / sheetScale);
+    const ry = Math.floor(my / sheetScale);
+    const tw = parseInt(twInput.value,10) || 24;
+    const th = parseInt(thInput.value,10) || 24;
+    const sx = Math.floor(rx / tw) * tw;
+    const sy = Math.floor(ry / th) * th;
+    selected = { sx, sy, sw: tw, sh: th };
+    drawSheet();
+    coordsDiv.innerText = `Selecionado: sx=${sx}, sy=${sy}, sw=${tw}, sh=${th}`;
+  });
+
+  function assign(kind) {
+    if (!selected) return alert("Selecione um tile primeiro (clique na imagem).");
+    tileSpecs[kind] = Object.assign({}, selected);
+    out.value = JSON.stringify({
+      ground: tileSpecs.ground || { sx:0, sy:0, sw:24, sh:24 },
+      tree: tileSpecs.tree || { sx:48, sy:0, sw:24, sh:24 },
+      enemy: tileSpecs.enemy || { sx:72, sy:0, sw:24, sh:24 },
+      hero: tileSpecs.hero || { sx:96, sy:0, sw:24, sh:24 }
+    }, null, 2);
+    coordsDiv.innerText = `${kind.toUpperCase()} atribuído: ${selected.sx}, ${selected.sy}`;
+  }
+
+  heroBtn.addEventListener("click", () => assign("hero"));
+  treeBtn.addEventListener("click", () => assign("tree"));
+  enemyBtn.addEventListener("click", () => assign("enemy"));
+
+  copyBtn.addEventListener("click", () => {
+    if (!out.value) return alert("Nada para copiar. Atribua pelo menos um tile.");
+    navigator.clipboard.writeText(out.value).then(() => {
+      alert("tileSpecs JSON copiado para a área de transferência. Cole no game.html → tileSpecs.");
+    }).catch(err => {
+      alert("Não foi possível copiar automaticamente. Copie manualmente do campo abaixo.");
+    });
+  });
+
+  window.addEventListener("load", () => loadImage());
+</script>
+</body>
+</html>
